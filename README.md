@@ -1,23 +1,35 @@
 # RENDEVO — Ophtalmologie
 
-Interface de prise de rendez-vous spécialisée, en français, conçue pour mobile et ordinateur.
+Interface de prise de demande de rendez-vous spécialisée, en français, conçue pour mobile et ordinateur.
 
-## Fichiers
+## Fichiers du site
 - `index.html` — structure accessible et parcours de réservation.
 - `styles.css` — identité visuelle dédiée à la spécialité.
 - `app.js` — parcours multi-étapes, validation, récapitulatif et intégration API.
 - `config.js` — identité du cabinet, motifs et paramètres d'intégration.
 
-## Avant la mise en service
-1. Personnaliser `config.js` avec le nom réel du cabinet, son téléphone et son adresse e-mail.
-2. Déployer Google Apps Script et renseigner son URL `/exec` dans `apiUrl`.
-3. Tester le backend et le contrat ci-dessous avant de mettre `bookingEnabled` à `true`.
-4. Tester la confirmation patient, la notification du cabinet, les conflits de créneaux, l'annulation, les rappels 24 h et le calendrier.
+## Backend Google Apps Script
+Le modèle est disponible dans [apps-script/Code.gs](apps-script/Code.gs).
 
-## Contrat d'intégration prévu
-Le frontend envoie du JSON avec `action: "createAppointment"`, `specialty`, `service`, `otherReason`, `date`, `timePreference`, `alternateDate`, `name`, `phone`, `email`, `note`, `consent` et `timezone`. Le backend devrait répondre en JSON avec `{"success":true,"message":"..." }` ou `{"success":false,"message":"..." }`.
+1. Ouvrir le fichier et copier son contenu dans un projet Google Apps Script.
+2. Associer le script à la feuille Google Sheets du cabinet, ou renseigner `BOOKING_SPREADSHEET_ID` dans les Script Properties.
+3. Modifier `CONFIG.CLINIC_EMAIL` dans le code avec l'adresse de réception du cabinet.
+4. Régler le fuseau horaire du projet sur `Africa/Algiers`.
+5. Exécuter `setupBookingSystem()` une fois et autoriser les accès.
+6. Déployer en tant que Web App : exécution en tant que propriétaire, accès « Anyone ».
+7. Copier l'URL `/exec` dans `config.js` (`apiUrl`), puis mettre `bookingEnabled: true` après les tests.
 
-Le backend doit revalider toutes les données côté serveur, vérifier les créneaux sans course critique, et ne jamais faire confiance aux validations du navigateur. Limiter les accès aux feuilles et journaux. Collecter le minimum nécessaire et ne pas demander de diagnostic ou de résultats médicaux dans le formulaire public.
+## Fonctionnement important
+Le formulaire collecte une **demande de rendez-vous** avec une date et une préférence horaire (matin / après-midi / indifférent). Il ne réserve pas un créneau horaire précis et ne confirme pas automatiquement un rendez-vous. Le secrétariat confirme le créneau en modifiant le statut de la ligne dans Google Sheets à `Confirmé`.
 
-## État
-Le frontend est commité. L'envoi reste désactivé tant que l'URL Apps Script n'est pas renseignée et que `bookingEnabled` reste à `false`. Aucun faux rendez-vous ou faux e-mail de confirmation n'est généré.
+Le backend :
+- enregistre les demandes dans la feuille `RendezVous`;
+- envoie un e-mail au cabinet si `CLINIC_EMAIL` est configuré;
+- envoie un accusé de réception au patient si son adresse e-mail est fournie;
+- fournit un lien d'annulation sécurisé par référence et jeton;
+- envoie un rappel quotidien pour les demandes dont le statut est `Confirmé` et dont la date est le lendemain (trigger installé par `setupBookingSystem()`).
+
+Le rappel est quotidien à l'heure définie dans `CONFIG.REMINDER_HOUR` (08:00 par défaut), dans le fuseau du projet. Ce n'est pas une garantie d'envoi exactement 24 heures avant l'heure du rendez-vous.
+
+## Sécurité et confidentialité
+Le backend revalide les champs essentiels et le consentement. Ne demandez pas de diagnostic, d'ordonnance ou de résultats médicaux dans le formulaire public. Gardez la feuille Google Sheets privée et ne publiez jamais son identifiant ni les données des patients. Testez les e-mails, l'annulation et les rappels avec des données fictives avant toute utilisation réelle.
