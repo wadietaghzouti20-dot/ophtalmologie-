@@ -20,7 +20,7 @@ const CONFIG = {
   PRODUCT: "RENDEVO",
   SPECIALTY: "Ophtalmologie",
   CLINIC_NAME: "Cabinet Ophtalmologie",
-  CLINIC_EMAIL: "", // REQUIRED: clinic notification inbox
+  CLINIC_EMAIL: "contact.rendevo@gmail.com", // RENDEVO notification inbox
   SPREADSHEET_ID: "", // Optional if this script is bound to the target Google Sheet
   SHEET_NAME: "RendezVous",
   TIMEZONE: "Africa/Algiers",
