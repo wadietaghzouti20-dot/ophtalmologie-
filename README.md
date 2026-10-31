@@ -1,35 +1,25 @@
 # RENDEVO — Ophtalmologie
 
-Interface de prise de demande de rendez-vous spécialisée, en français, conçue pour mobile et ordinateur.
+Site de réservation en français pour un cabinet d'ophtalmologie, avec créneaux réels, réservation immédiate, prévention des doubles réservations, Google Sheets, Google Calendar, confirmation e-mail, annulation sécurisée et rappel programmé 24 heures avant le rendez-vous.
 
-## Fichiers du site
-- `index.html` — structure accessible et parcours de réservation.
-- `styles.css` — identité visuelle dédiée à la spécialité.
-- `app.js` — parcours multi-étapes, validation, récapitulatif et intégration API.
-- `config.js` — identité du cabinet, motifs et paramètres d'intégration.
+## Mise à jour Apps Script obligatoire
 
-## Backend Google Apps Script
-Le modèle est disponible dans [apps-script/Code.gs](apps-script/Code.gs).
+Le code source du backend est dans [apps-script/Code.gs](./apps-script/Code.gs). Une modification GitHub ne met pas automatiquement à jour le Web App Apps Script.
 
-1. Ouvrir le fichier et copier son contenu dans un projet Google Apps Script.
-2. Associer le script à la feuille Google Sheets du cabinet, ou renseigner `BOOKING_SPREADSHEET_ID` dans les Script Properties.
-3. Modifier `CONFIG.CLINIC_EMAIL` dans le code avec l'adresse de réception du cabinet.
-4. Régler le fuseau horaire du projet sur `Africa/Algiers`.
-5. Exécuter `setupBookingSystem()` une fois et autoriser les accès.
-6. Déployer en tant que Web App : exécution en tant que propriétaire, accès « Anyone ».
-7. Copier l'URL `/exec` dans `config.js` (`apiUrl`), puis mettre `bookingEnabled: true` après les tests.
+1. Ouvrir le projet Apps Script qui correspond à l'URL déjà présente dans `config.js`.
+2. Remplacer tout le contenu de `Code.gs` par le fichier [apps-script/Code.gs](./apps-script/Code.gs), puis enregistrer.
+3. Exécuter `setupBookingSystem()` une fois et autoriser Sheets, Gmail, Calendar et les déclencheurs.
+4. Vérifier le journal d'exécution pour l'URL de la feuille.
+5. Déployer > Gérer les déploiements > Modifier > Nouvelle version > Déployer. Garder la même URL /exec.
+6. Tester une réservation future, la confirmation e-mail, la ligne `Demandes`, Google Calendar, le rappel et l'annulation.
 
-## Fonctionnement important
-Le formulaire collecte une **demande de rendez-vous** avec une date et une préférence horaire (matin / après-midi / indifférent). Il ne réserve pas un créneau horaire précis et ne confirme pas automatiquement un rendez-vous. Le secrétariat confirme le créneau en modifiant le statut de la ligne dans Google Sheets à `Confirmé`.
+## Horaires de base
 
-Le backend :
-- enregistre les demandes dans la feuille `RendezVous`;
-- envoie un e-mail au cabinet si `CLINIC_EMAIL` est configuré;
-- envoie un accusé de réception au patient si son adresse e-mail est fournie;
-- fournit un lien d'annulation sécurisé par référence et jeton;
-- envoie un rappel quotidien pour les demandes dont le statut est `Confirmé` et dont la date est le lendemain (trigger installé par `setupBookingSystem()`).
+- Dimanche à jeudi : 08:00–17:00
+- Vendredi : fermé
+- Samedi : 10:00–16:00
+- Départs de créneaux toutes les 15 minutes; durée selon le motif.
 
-Le rappel est quotidien à l'heure définie dans `CONFIG.REMINDER_HOUR` (08:00 par défaut), dans le fuseau du projet. Ce n'est pas une garantie d'envoi exactement 24 heures avant l'heure du rendez-vous.
+Le rappel est programmé par déclencheur unique à l'heure du rendez-vous moins 24 heures. Google peut toutefois retarder l'exécution d'un déclencheur. Les rendez-vous pris à moins de 24 heures ne peuvent pas recevoir un rappel anticipé de 24 heures.
 
-## Sécurité et confidentialité
-Le backend revalide les champs essentiels et le consentement. Ne demandez pas de diagnostic, d'ordonnance ou de résultats médicaux dans le formulaire public. Gardez la feuille Google Sheets privée et ne publiez jamais son identifiant ni les données des patients. Testez les e-mails, l'annulation et les rappels avec des données fictives avant toute utilisation réelle.
+Utiliser uniquement des données fictives pour les tests. Ne pas collecter de dossiers médicaux ou de détails cliniques sensibles dans ce formulaire.
