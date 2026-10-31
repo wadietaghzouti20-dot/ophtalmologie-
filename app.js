@@ -1,131 +1,384 @@
 (() => {
   "use strict";
-  const cfg = window.RENDEVO_CONFIG || {};
-  const $ = (selector, root = document) => root.querySelector(selector);
-  const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
-  const form = $("#appointment-form");
-  const steps = $$(".form-step");
-  const alertBox = $("#form-alert");
-  const serviceBox = $("#service-options");
-  let currentStep = 1;
+
+  const form = document.getElementById("appointment-form");
+  if (!form) return;
+
+  const steps = Array.from(document.querySelectorAll(".form-step"));
+  const backButton = document.getElementById("back-button");
+  const nextButton = document.getElementById("next-button");
+  const submitButton = document.getElementById("submit-button");
+  const stepCounter = document.getElementById("step-counter");
+  const progressTrack = document.getElementById("progress-track");
+  const progressFill = document.getElementById("progress-fill");
+  const alertBox = document.getElementById("form-alert");
+  const reviewList = document.getElementById("review-list");
+  const successPanel = document.getElementById("success-panel");
+  const formActions = document.getElementById("form-actions");
   const totalSteps = steps.length;
+  let currentStep = 1;
+  let submitting = false;
+  let availabilityLoading = false;
+  let availabilityRequest = 0;
+  let lastSlotDate = "";
+  let lastSlotService = "";
 
-  $("#year").textContent = new Date().getFullYear();
-  $("#clinic-name").textContent = cfg.clinicName || "Cabinet médical";
-  $("#footer-clinic").textContent = cfg.clinicName || "Cabinet médical";
-  document.title = "Prendre rendez-vous | " + (cfg.clinicName || cfg.specialty || "Cabinet médical");
-  if (cfg.phone) {
-    const phone = $("#header-phone");
-    phone.href = "tel:" + cfg.phone.replace(/[^+\d]/g, "");
-    phone.querySelector("strong").textContent = cfg.phone;
-  } else {
-    $("#header-phone").addEventListener("click", e => { e.preventDefault(); showAlert("Les coordonnées du cabinet seront ajoutées lors de la configuration.", "info"); });
+  const config = window.BOOKING_CONFIG || {};
+  const labels = {
+    service: "Motif du rendez-vous",
+    preferredDate: "Date souhaitée",
+    preferredTime: "Heure du rendez-vous",
+    fullName: "Nom et prénom",
+    phone: "Téléphone",
+    email: "E-mail",
+    notes: "Message"
+  };
+
+  function localDateString(date) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    return year + "-" + month + "-" + day;
   }
 
-  const iconFor = (label) => /grossesse|gynéco|cycle|contraception/i.test(label) ? "♡" : /ECG|électro|effort|cardio|tension/i.test(label) ? "♡" : /vision|fond d'œil|glaucome|ophtalmo|correction/i.test(label) ? "◉" : /résultat|suivi|contrôle/i.test(label) ? "✓" : "＋";
-  (cfg.services || []).forEach((item, i) => {
-    const label = document.createElement("label");
-    label.className = "choice-card";
-    const input = document.createElement("input");
-    input.type = "radio"; input.name = "service"; input.value = item[0]; input.required = true;
-    const icon = document.createElement("span"); icon.className = "choice-icon"; icon.setAttribute("aria-hidden","true"); icon.textContent = iconFor(item[0]);
-    const text = document.createElement("span"); text.className = "choice-text";
-    const strong = document.createElement("strong"); strong.textContent = item[0];
-    const small = document.createElement("small"); small.textContent = item[1];
-    text.append(strong, small);
-    const arrow = document.createElement("span"); arrow.className = "choice-arrow"; arrow.setAttribute("aria-hidden","true"); arrow.textContent = "›";
-    label.append(input, icon, text, arrow);
-    serviceBox.append(label);
-    input.addEventListener("change", () => {
-      $$(".choice-card", serviceBox).forEach(card => card.classList.toggle("is-selected", $("input",card).checked));
-      $("#other-reason-wrap").hidden = input.value !== "Autre motif";
+  const dateInput = document.getElementById("preferred-date");
+  const timeSelect = document.getElementById("preferred-time");
+  const slotStatus = document.getElementById("slot-status");
+  if (dateInput) {
+    dateInput.min = localDateString(new Date());
+    dateInput.addEventListener("change", () => loadAvailableSlots());
+  }
+
+  function showAlert(message) {
+    alertBox.textContent = message;
+    alertBox.hidden = false;
+    alertBox.scrollIntoView({ block: "nearest" });
+  }
+
+  function clearAlert() {
+    alertBox.textContent = "";
+    alertBox.hidden = true;
+  }
+
+  function showStep(number) {
+    currentStep = Math.min(Math.max(number, 1), totalSteps);
+    steps.forEach((step) => {
+      const active = Number(step.dataset.step) === currentStep;
+      step.hidden = !active;
+      step.classList.toggle("is-active", active);
     });
-  });
-
-  const dateInput = $("#appointment-date"), alternateInput = $("#alternate-date");
-  const today = new Date(); today.setMinutes(today.getMinutes() - today.getTimezoneOffset());
-  const todayStr = today.toISOString().slice(0,10);
-  dateInput.min = todayStr; alternateInput.min = todayStr;
-  dateInput.addEventListener("change", () => { alternateInput.min = dateInput.value || todayStr; if (alternateInput.value && alternateInput.value < alternateInput.min) alternateInput.value = ""; });
-  alternateInput.addEventListener("change", () => { if (dateInput.value && alternateInput.value < dateInput.value) alternateInput.value = ""; });
-
-  function showAlert(message, type = "error") {
-    alertBox.textContent = message; alertBox.className = "form-alert " + type; alertBox.hidden = false;
-    alertBox.scrollIntoView({behavior:"smooth",block:"nearest"});
-  }
-  function clearAlert(){ alertBox.hidden = true; alertBox.textContent = ""; }
-  function validateStep(n) {
+    stepCounter.textContent = "Étape " + currentStep + " sur " + totalSteps;
+    progressFill.style.width = ((currentStep / totalSteps) * 100) + "%";
+    progressTrack.setAttribute("aria-valuenow", String(currentStep));
+    backButton.disabled = currentStep === 1 || submitting;
+    nextButton.hidden = currentStep === totalSteps;
+    submitButton.hidden = currentStep !== totalSteps;
+    nextButton.disabled = submitting;
+    submitButton.disabled = submitting;
     clearAlert();
-    if (n === 1 && !form.querySelector('input[name="service"]:checked')) return "Choisissez un motif de rendez-vous pour continuer.";
-    if (n === 2) {
-      if (!dateInput.value) return "Choisissez une date souhaitée.";
-      if (dateInput.value < todayStr) return "La date souhaitée doit être aujourd'hui ou dans le futur.";
-      if (alternateInput.value && alternateInput.value < dateInput.value) return "La seconde date doit être égale ou postérieure à la première.";
-    }
-    if (n === 3) {
-      if (!$("#patient-name").value.trim()) return "Indiquez votre nom et prénom.";
-      const phone = $("#patient-phone").value.trim();
-      if (!phone || phone.replace(/\D/g,"").length < 8) return "Indiquez un numéro de téléphone valide.";
-      const email = $("#patient-email").value.trim();
-      if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return "Vérifiez le format de votre adresse e-mail.";
-    }
-    return "";
+    const heading = document.getElementById("step-title-" + currentStep);
+    if (heading) heading.setAttribute("tabindex", "-1");
+    if (heading) heading.focus({ preventScroll: true });
+    if (currentStep === 2) loadAvailableSlots();
   }
-  function setStep(n) {
-    currentStep = n;
-    steps.forEach(step => { const active = Number(step.dataset.step) === n; step.hidden = !active; step.classList.toggle("is-active", active); });
-    $("#step-counter").textContent = "Étape " + n + " sur " + totalSteps;
-    $("#progress-track").setAttribute("aria-valuenow", String(n));
-    $("#progress-fill").style.width = (n / totalSteps * 100) + "%";
-    $("#back-button").hidden = n === 1;
-    $("#continue-button").hidden = n === totalSteps;
-    $("#submit-button").hidden = n !== totalSteps;
-    if (n === totalSteps) renderReview();
+
+  function validateCurrentStep() {
     clearAlert();
-    $("#form-heading").textContent = n === 1 ? "Commençons" : n === 2 ? "Vos disponibilités" : n === 3 ? "Vos coordonnées" : "Dernière vérification";
-    $("#booking").scrollIntoView({behavior:"smooth",block:"start"});
+    const activeStep = steps.find((step) => Number(step.dataset.step) === currentStep);
+    if (!activeStep) return true;
+    const controls = Array.from(activeStep.querySelectorAll("input, textarea, select"));
+    for (const control of controls) {
+      if (control.type === "radio") {
+        const group = controls.filter((item) => item.type === "radio" && item.name === control.name);
+        if (control.required && !group.some((item) => item.checked)) {
+          showAlert("Veuillez sélectionner une option pour continuer.");
+          control.focus();
+          return false;
+        }
+        continue;
+      }
+      if (control.type === "checkbox") {
+        if (control.required && !control.checked) {
+          showAlert("Veuillez confirmer votre accord avant d’envoyer la demande.");
+          control.focus();
+          return false;
+        }
+        continue;
+      }
+      if (control.required && !control.value.trim()) {
+        showAlert("Veuillez remplir le champ « " + (control.labels && control.labels[0] ? control.labels[0].innerText.replace("*", "").trim() : control.name) + " ».");
+        control.focus();
+        return false;
+      }
+      if (control.value.trim() && !control.checkValidity()) {
+        showAlert(control.type === "email" ? "Veuillez vérifier votre adresse e-mail." : "Veuillez vérifier les informations saisies.");
+        control.focus();
+        return false;
+      }
+    }
+    if (currentStep === 2) {
+      const chosenDate = dateInput.value;
+      if (chosenDate && chosenDate < localDateString(new Date())) {
+        showAlert("Veuillez choisir une date à partir d’aujourd’hui.");
+        dateInput.focus();
+        return false;
+      }
+      if (availabilityLoading) {
+        showAlert("Veuillez attendre le chargement des créneaux disponibles.");
+        return false;
+      }
+      if (!timeSelect || !timeSelect.value) {
+        showAlert("Veuillez sélectionner une heure disponible avant de continuer.");
+        if (timeSelect) timeSelect.focus();
+        return false;
+      }
+    }
+    if (currentStep === 3) {
+      const phone = document.getElementById("phone");
+      const digits = phone.value.replace(/\D/g, "");
+      if (digits.length < 8 || digits.length > 15) {
+        showAlert("Veuillez saisir un numéro de téléphone valide.");
+        phone.focus();
+        return false;
+      }
+    }
+    return true;
   }
-  function value(name) { const el = form.elements[name]; if (!el) return ""; if (el instanceof RadioNodeList) return el.value || ""; return el.value || ""; }
-  function prettyDate(v) { if (!v) return "Non précisée"; return new Intl.DateTimeFormat("fr-FR",{dateStyle:"long",timeZone:"UTC"}).format(new Date(v+"T12:00:00Z")); }
-  function renderReview() {
-    const rows = [
-      ["Motif", value("service") + (value("otherReason") ? " — "+value("otherReason") : "")],
-      ["Date souhaitée", prettyDate(value("date"))],
-      ["Préférence horaire", value("timePreference") || "Indifférent"],
-      ["Autre date possible", value("alternateDate") ? prettyDate(value("alternateDate")) : "Non précisée"],
-      ["Nom", value("name")], ["Téléphone", value("phone")], ["E-mail", value("email") || "Non renseignée"],
-      ["Note au secrétariat", value("note") || "Aucune"]
-    ];
-    const list = $("#review-list"); list.replaceChildren();
-    rows.forEach(([label, val]) => { const dt = document.createElement("dt"); dt.textContent = label; const dd = document.createElement("dd"); dd.textContent = val; list.append(dt,dd); });
-    const configured = Boolean(cfg.apiUrl && cfg.bookingEnabled);
-    $("#integration-note").hidden = configured;
-    $("#submit-button").textContent = configured ? "Envoyer la demande →" : "Configuration requise";
-    $("#submit-button").disabled = !configured;
-    if (!configured) $("#integration-note").innerHTML = "<strong>Réservation bientôt disponible</strong><p>Le formulaire visuel est prêt, mais la connexion sécurisée du cabinet n'est pas encore activée. Aucune demande ni confirmation fictive ne sera créée.</p>";
+
+  function selectedValue(name) {
+    if (name === "preferredTime") return timeSelect ? timeSelect.value : "";
+    const selected = form.querySelector('input[name="' + name + '"]:checked');
+    return selected ? selected.value : "";
   }
-  $("#continue-button").addEventListener("click", () => {
-    const error = validateStep(currentStep);
-    if (error) return showAlert(error);
-    if (currentStep < totalSteps) setStep(currentStep + 1);
-  });
-  $("#back-button").addEventListener("click", () => { if (currentStep > 1) setStep(currentStep - 1); });
-  form.addEventListener("submit", async e => {
-    e.preventDefault();
-    const error = validateStep(3);
-    if (error) { setStep(3); return showAlert(error); }
-    if (!$("#privacy-consent").checked) return showAlert("Veuillez accepter l'utilisation de vos coordonnées pour traiter la demande.");
-    if (!cfg.apiUrl || !cfg.bookingEnabled) return showAlert("La réservation n'est pas encore activée. Aucune demande n'a été envoyée.", "info");
-    const submit = $("#submit-button"); submit.disabled = true; submit.textContent = "Envoi en cours…";
+
+  async function loadAvailableSlots() {
+    if (!timeSelect || !slotStatus || !dateInput) return;
+    const requestId = ++availabilityRequest;
+    const date = dateInput.value;
+    const service = selectedValue("service");
+    const previousSelection = date === lastSlotDate && service === lastSlotService ? timeSelect.value : "";
+    timeSelect.replaceChildren();
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+
+    if (!date || !service) {
+      placeholder.textContent = "Choisissez d’abord une date";
+      timeSelect.append(placeholder);
+      timeSelect.disabled = true;
+      slotStatus.textContent = "Choisissez une date pour afficher les heures disponibles.";
+      availabilityLoading = false;
+      return;
+    }
+
+    placeholder.textContent = "Chargement des créneaux…";
+    timeSelect.append(placeholder);
+    timeSelect.disabled = true;
+    slotStatus.textContent = "Recherche des heures disponibles…";
+    availabilityLoading = true;
+
     try {
-      const payload = {action:"createAppointment", specialty:cfg.specialty, service:value("service"), otherReason:value("otherReason"), date:value("date"), timePreference:value("timePreference"), alternateDate:value("alternateDate"), name:value("name").trim(), phone:value("phone").trim(), email:value("email").trim(), note:value("note").trim(), consent:true, timezone:cfg.timezone};
-      const response = await fetch(cfg.apiUrl, {method:"POST", headers:{"Content-Type":"text/plain;charset=utf-8"}, body:JSON.stringify(payload), redirect:"follow"});
+      const endpoint = typeof config.appsScriptUrl === "string" ? config.appsScriptUrl.trim() : "";
+      if (!endpoint || !/^https:\/\/script\.google\.com\/macros\/s\//.test(endpoint)) {
+        throw new Error("La connexion au service de réservation n’est pas configurée.");
+      }
+      const response = await fetch(endpoint, {
+        method: "POST",
+        redirect: "follow",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({ action: "availability", preferredDate: date, service: service })
+      });
+      if (!response.ok) throw new Error("Le service de réservation est temporairement indisponible.");
       const result = await response.json();
-      if (!response.ok || !result.success) throw new Error(result.message || "Impossible de transmettre la demande.");
-      form.hidden = true; $("#success-panel").hidden = false; $("#success-message").textContent = result.message || "Votre demande a été transmise au cabinet.";
-    } catch (err) { showAlert(err.message || "Une erreur est survenue. Réessayez ou contactez le cabinet."); }
-    finally { submit.disabled = false; submit.textContent = "Envoyer la demande →"; }
+      if (!result || result.success !== true) {
+        throw new Error(result && result.message ? result.message : "Impossible de charger les créneaux.");
+      }
+      if (requestId !== availabilityRequest) return;
+
+      const slots = Array.isArray(result.availableSlots) ? result.availableSlots : [];
+      timeSelect.replaceChildren();
+      const firstOption = document.createElement("option");
+      firstOption.value = "";
+      firstOption.textContent = slots.length ? "Sélectionnez une heure" : "Aucun créneau disponible";
+      timeSelect.append(firstOption);
+      slots.forEach((slot) => {
+        const option = document.createElement("option");
+        option.value = slot;
+        option.textContent = slot;
+        if (slot === previousSelection) option.selected = true;
+        timeSelect.append(option);
+      });
+      timeSelect.disabled = slots.length === 0;
+      lastSlotDate = date;
+      lastSlotService = service;
+      slotStatus.textContent = result.message || (slots.length
+        ? "Ces créneaux sont disponibles au moment de la vérification."
+        : "Aucun créneau disponible. Essayez une autre date.");
+    } catch (error) {
+      if (requestId !== availabilityRequest) return;
+      timeSelect.replaceChildren();
+      const errorOption = document.createElement("option");
+      errorOption.value = "";
+      errorOption.textContent = "Créneaux indisponibles";
+      timeSelect.append(errorOption);
+      timeSelect.disabled = true;
+      slotStatus.textContent = error instanceof Error ? error.message : "Impossible de charger les créneaux.";
+    } finally {
+      if (requestId === availabilityRequest) availabilityLoading = false;
+    }
+  }
+
+  function getFormData() {
+    return {
+      service: selectedValue("service"),
+      preferredDate: document.getElementById("preferred-date").value,
+      preferredTime: selectedValue("preferredTime"),
+      fullName: document.getElementById("full-name").value.trim(),
+      phone: document.getElementById("phone").value.trim(),
+      email: document.getElementById("email").value.trim(),
+      notes: document.getElementById("notes").value.trim(),
+      privacyConsent: document.getElementById("privacy-consent").checked,
+      source: "ophtalmologie-rendevo",
+      timezone: "Africa/Algiers",
+      submittedAt: new Date().toISOString()
+    };
+  }
+
+  function readableDate(value) {
+    if (!value) return "Non précisée";
+    const date = new Date(value + "T12:00:00");
+    return new Intl.DateTimeFormat("fr-FR", { day: "numeric", month: "long", year: "numeric" }).format(date);
+  }
+
+  function renderReview() {
+    const data = getFormData();
+    const rows = [
+      [labels.service, data.service],
+      [labels.preferredDate, readableDate(data.preferredDate)],
+      [labels.preferredTime, data.preferredTime],
+      [labels.fullName, data.fullName],
+      [labels.phone, data.phone],
+      [labels.email, data.email || "Non renseignée"],
+      [labels.notes, data.notes || "Aucun message"]
+    ];
+    reviewList.replaceChildren();
+    rows.forEach(([label, value]) => {
+      const row = document.createElement("div");
+      row.className = "review-row";
+      const term = document.createElement("dt");
+      term.textContent = label;
+      const detail = document.createElement("dd");
+      detail.textContent = value;
+      row.append(term, detail);
+      reviewList.append(row);
+    });
+  }
+
+  async function sendRequest(data) {
+    const endpoint = typeof config.appsScriptUrl === "string" ? config.appsScriptUrl.trim() : "";
+    if (!endpoint || !/^https:\/\/script\.google\.com\/macros\/s\//.test(endpoint)) {
+      throw new Error("La connexion au service de réservation n’est pas encore configurée. Votre demande n’a pas été envoyée.");
+    }
+    const response = await fetch(endpoint, {
+      method: "POST",
+      redirect: "follow",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify(data)
+    });
+    if (!response.ok) throw new Error("Le service de réservation est temporairement indisponible. Veuillez réessayer.");
+    let result;
+    try {
+      result = await response.json();
+    } catch (_) {
+      throw new Error("La réponse du service est illisible. Votre demande n’a pas pu être confirmée.");
+    }
+    if (!result || result.success !== true) {
+      throw new Error(result && result.message ? result.message : "La demande n’a pas été acceptée. Veuillez réessayer.");
+    }
+    return result;
+  }
+
+  function setSubmitting(value) {
+    submitting = value;
+    backButton.disabled = value || currentStep === 1;
+    nextButton.disabled = value;
+    submitButton.disabled = value;
+    submitButton.textContent = value ? "Confirmation en cours…" : "Confirmer mon rendez-vous →";
+  }
+
+  backButton.addEventListener("click", () => {
+    if (!submitting && currentStep > 1) showStep(currentStep - 1);
   });
-  $("#new-request").addEventListener("click", () => { form.reset(); form.hidden = false; $("#success-panel").hidden = true; $$(".choice-card",serviceBox).forEach(c=>c.classList.remove("is-selected")); $("#other-reason-wrap").hidden = true; setStep(1); });
-  setStep(1);
+
+  nextButton.addEventListener("click", () => {
+    if (!validateCurrentStep()) return;
+    if (currentStep < totalSteps) {
+      if (currentStep + 1 === totalSteps) renderReview();
+      showStep(currentStep + 1);
+    }
+  });
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (currentStep !== totalSteps || submitting || !validateCurrentStep()) return;
+    const data = getFormData();
+    setSubmitting(true);
+    clearAlert();
+    try {
+      const result = await sendRequest(data);
+      form.hidden = true;
+      formActions.hidden = true;
+      document.querySelector(".progress-track").hidden = true;
+      document.querySelector(".card-topline").hidden = true;
+      successPanel.hidden = false;
+      document.getElementById("success-message").textContent =
+        result.message || "Votre rendez-vous est confirmé.";
+      if (result.reference) {
+        const ref = document.getElementById("request-reference");
+        ref.textContent = "Référence de réservation : " + String(result.reference);
+        ref.hidden = false;
+      }
+      successPanel.scrollIntoView({ block: "nearest" });
+    } catch (error) {
+      showAlert(error instanceof Error ? error.message : "Une erreur est survenue. Veuillez réessayer.");
+    } finally {
+      setSubmitting(false);
+    }
+  });
+
+  document.getElementById("new-request-button").addEventListener("click", () => {
+    form.reset();
+    form.hidden = false;
+    formActions.hidden = false;
+    document.querySelector(".progress-track").hidden = false;
+    document.querySelector(".card-topline").hidden = false;
+    successPanel.hidden = true;
+    document.getElementById("request-reference").hidden = true;
+    document.getElementById("notes-count").textContent = "0 / 1000";
+    lastSlotDate = "";
+    lastSlotService = "";
+    if (timeSelect) { timeSelect.replaceChildren(); timeSelect.disabled = true; }
+    if (slotStatus) slotStatus.textContent = "Choisissez une date pour afficher les heures disponibles.";
+    showStep(1);
+  });
+
+  document.getElementById("notes").addEventListener("input", (event) => {
+    document.getElementById("notes-count").textContent = event.target.value.length + " / 1000";
+  });
+
+  const clinicName = typeof config.clinicName === "string" && config.clinicName.trim() ? config.clinicName.trim() : "Cabinet médical";
+  document.getElementById("clinic-name").textContent = clinicName;
+  document.getElementById("footer-clinic-name").textContent = clinicName;
+  document.title = "Prendre rendez-vous | " + clinicName;
+  document.getElementById("current-year").textContent = String(new Date().getFullYear());
+
+  const phone = typeof config.clinicPhone === "string" ? config.clinicPhone.trim() : "";
+  const phoneLink = document.getElementById("header-phone");
+  if (phone) {
+    phoneLink.href = "tel:" + phone.replace(/[^+\d]/g, "");
+    phoneLink.querySelector("strong").textContent = phone;
+  } else {
+    phoneLink.hidden = true;
+  }
+
+  showStep(1);
 })();
